@@ -38,7 +38,7 @@ Key dependencies:
 ## Repository layout
 
 ```
-amoc_analysis/
+amoc-analysis/
 ├── data/
 │   ├── input/      # CESM model output (read-only — do not modify)
 │   ├── processed/  # per-run scalar time series (git-ignored, regenerable)
