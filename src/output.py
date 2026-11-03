@@ -969,19 +969,21 @@ def plot_case_grid_page(field, title, cmap, vmin, vmax, pdf, rasterized):
 
 # CO2 x AMOC decomposition book (``scripts/plot_co2_amoc_decomposition.py``). The
 # decomposition page has one column per decomposed CO2 multiple (no hosing) and
-# five rows of changes from 1xCO2: the three CO2_AMOC_TERM_ROWS, their sum (the
-# regression's nxCO2 - 1xCO2; the intercept a cancels), and the simulated
-# nxCO2 - 1xCO2, so the last two rows show how well the partition reproduces the
-# simulated change. Titles are formatted with the column's ``co2`` and the AMOC
-# transform's name ``amoc`` (``regression.amoc_transform_label``).
+# four rows of changes from 1xCO2: the three CO2_AMOC_TERM_ROWS and their sum (the
+# regression's nxCO2 - 1xCO2; the intercept a cancels). The check page has the same
+# columns and rows simulated nxCO2 - 1xCO2, the regression's (as on the
+# decomposition page), and simulated minus regression. Titles are formatted with
+# the column's ``co2`` and the AMOC transform's name ``amoc``
+# (``regression.amoc_transform_label``).
 CO2_AMOC_COLUMNS = [2, 4]
 CO2_AMOC_TERM_ROWS = [  # (``regression.fit_co2_amoc`` parameter, row title)
     ("log2_co2", "CO2 effect at 1xCO2 AMOC: b·Δlog2(CO2)"),
     ("amoc_anomaly", "AMOC effect at 1xCO2: c·Δ{amoc}"),
     ("log2_co2.amoc_anomaly", "nonlinear: d·Δlog2(CO2)·Δ{amoc}"),
 ]
-CO2_AMOC_FITTED_CHANGE_TITLE = "regression {co2}xCO2 − 1xCO2: sum of rows 1-3"
+CO2_AMOC_FITTED_CHANGE_TITLE = "regression {co2}xCO2 − 1xCO2: sum of the three effects"
 CO2_AMOC_SIMULATED_CHANGE_TITLE = "simulated {co2}xCO2 − 1xCO2"
+CO2_AMOC_CHANGE_RESIDUAL_TITLE = "simulated − regression ({co2}xCO2 − 1xCO2)"
 
 # A panel of ``plot_field_and_change_grid``: ``change`` panels (differences) share a
 # symmetric diverging scale, the others (absolute fields) a ``viridis`` scale;
@@ -1048,16 +1050,14 @@ def plot_field_and_change_grid(panels, shape, name, units, cmap, title, pdf):
     )
 
 
-def plot_co2_amoc_decomposition(decomposition, actual, name, units, cmap, title, pdf):
+def plot_co2_amoc_decomposition(decomposition, name, units, cmap, title, pdf):
     """Map page (plus zonal page) of a ``regression.co2_amoc_decomposition`` result:
     one column per ``CO2_AMOC_COLUMNS`` level, headed by its Δlog2(CO2), ΔAMOC and the
-    change in transformed AMOC (e.g. Δlog2(AMOC)), and five rows of changes from
+    change in transformed AMOC (e.g. Δlog2(AMOC)), and four rows of changes from
     1xCO2: the ``CO2_AMOC_TERM_ROWS`` terms (contoured where their coefficient's
-    p <= ``SIGNIFICANCE_P``), their sum (the regression's nxCO2 - 1xCO2) and the
-    simulated nxCO2 - 1xCO2 from ``actual`` (the no-hosing runs, ``(co2, lat, lon)``).
-    All rows share one diverging scale (``plot_field_and_change_grid``)."""
+    p <= ``SIGNIFICANCE_P``) and their sum (the regression's nxCO2 - 1xCO2). All
+    rows share one diverging scale (``plot_field_and_change_grid``)."""
     amoc = decomposition.attrs["amoc_transform"]
-    terms = [param for param, _ in CO2_AMOC_TERM_ROWS]
     panels = {}
     for j, co2 in enumerate(CO2_AMOC_COLUMNS):
         column = decomposition.sel(co2=co2)
@@ -1069,30 +1069,29 @@ def plot_co2_amoc_decomposition(decomposition, actual, name, units, cmap, title,
             panels[i, j] = MapPanel(row_title.format(amoc=amoc), column["contribution"].sel(param=param), True,
                                     column["pvalue"].sel(param=param))
         panels[0, j] = panels[0, j]._replace(title=f"{header}\n{panels[0, j].title}")
-        panels[len(terms), j] = MapPanel(
-            CO2_AMOC_FITTED_CHANGE_TITLE.format(co2=co2),
-            column["contribution"].sel(param=terms).sum("param"), True, None)
-        panels[len(terms) + 1, j] = MapPanel(
-            CO2_AMOC_SIMULATED_CHANGE_TITLE.format(co2=co2),
-            actual.sel(co2=co2) - actual.sel(co2=1), True, None)
-    plot_field_and_change_grid(panels, (len(terms) + 2, len(CO2_AMOC_COLUMNS)),
+        panels[len(CO2_AMOC_TERM_ROWS), j] = MapPanel(
+            CO2_AMOC_FITTED_CHANGE_TITLE.format(co2=co2), column["fitted_change"], True, None)
+    plot_field_and_change_grid(panels, (len(CO2_AMOC_TERM_ROWS) + 1, len(CO2_AMOC_COLUMNS)),
                                name, units, cmap, title, pdf)
 
 
-def plot_co2_amoc_reconstruction_check(actual, fitted, name, units, cmap, title, pdf):
-    """Map page (plus zonal page) comparing the no-hosing runs with the regression:
-    one row per CO2 level of ``actual`` and ``fitted`` (``(co2, lat, lon)``), and
-    columns simulated, reconstructed and simulated minus reconstructed. The first
-    two columns share one absolute scale, the differences one diverging scale
-    (``plot_field_and_change_grid``)."""
+def plot_co2_amoc_reconstruction_check(actual, decomposition, name, units, cmap, title, pdf):
+    """Map page (plus zonal page) checking the regression's CO2 response against the
+    no-hosing runs ``actual`` (``(co2, lat, lon)``): one column per
+    ``CO2_AMOC_COLUMNS`` level and rows simulated nxCO2 - 1xCO2, the regression's
+    (``decomposition["fitted_change"]``), and simulated minus regression. All rows
+    share one diverging scale (``plot_field_and_change_grid``)."""
     panels = {}
-    for i, co2 in enumerate(actual["co2"].values):
-        simulated, reconstructed = actual.sel(co2=co2), fitted.sel(co2=co2)
-        panels[i, 0] = MapPanel(f"{co2}xCO2 simulated", simulated, False, None)
-        panels[i, 1] = MapPanel(f"{co2}xCO2 reconstructed (regression)", reconstructed, False, None)
-        panels[i, 2] = MapPanel(f"{co2}xCO2 simulated − reconstructed",
-                                simulated - reconstructed, True, None)
-    plot_field_and_change_grid(panels, (actual.sizes["co2"], 3), name, units, cmap, title, pdf)
+    for j, co2 in enumerate(CO2_AMOC_COLUMNS):
+        simulated = actual.sel(co2=co2) - actual.sel(co2=1)
+        regression = decomposition["fitted_change"].sel(co2=co2)
+        panels[0, j] = MapPanel(CO2_AMOC_SIMULATED_CHANGE_TITLE.format(co2=co2),
+                                simulated, True, None)
+        panels[1, j] = MapPanel(CO2_AMOC_FITTED_CHANGE_TITLE.format(co2=co2),
+                                regression, True, None)
+        panels[2, j] = MapPanel(CO2_AMOC_CHANGE_RESIDUAL_TITLE.format(co2=co2),
+                                simulated - regression, True, None)
+    plot_field_and_change_grid(panels, (3, len(CO2_AMOC_COLUMNS)), name, units, cmap, title, pdf)
 
 
 def plot_case_grid_zonal_page(field, title, pdf):

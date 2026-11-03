@@ -8,7 +8,7 @@ n = 9, df = 5):
 
 with AMOC the run's 2101-2150 mean at 26.5N (Sv) and T its Box-Cox transform of
 power ``--amoc-power`` (``regression.amoc_transform``; default 0 = log2 AMOC, 1 =
-linear). Both predictors are zero at the 1xCO2 control (``regression.fit_co2_amoc``). The decomposition page is a 5 x 2 map
+linear). Both predictors are zero at the 1xCO2 control (``regression.fit_co2_amoc``). The decomposition page is a 4 x 2 map
 grid: columns 2xCO2 and 4xCO2 (no hosing), each with dC = log2(n) and dA = that
 run's transformed AMOC minus the control's; rows (all changes from 1xCO2)
 
@@ -16,13 +16,13 @@ run's transformed AMOC minus the control's; rows (all changes from 1xCO2)
   2. c * dA      effect of the run's AMOC change, at 1xCO2
   3. d * dC * dA nonlinear (interaction) effect
   4. sum of rows 1-3: the regression's nxCO2 - 1xCO2 (the intercept a cancels)
-  5. the simulated nxCO2 - 1xCO2, to judge how well rows 1-3 partition it
 
-All five rows share one symmetric color scale; rows 1-3 are contoured at the
+All four rows share one symmetric color scale; rows 1-3 are contoured at the
 colorbar ticks, black where their coefficient's p <= 0.05 and light grey where
-not (rows 4 and 5 have no single coefficient, so no contours). The check page is a 3 x 3
-grid: rows 1x, 2x, 4xCO2 (no hosing), columns simulated, reconstructed, and
-simulated minus reconstructed. Each map page is followed by its zonal-statistics
+not (row 4 has no single coefficient, so no contours). The check page is a 3 x 2
+grid with the same columns and rows simulated nxCO2 - 1xCO2, the regression's
+nxCO2 - 1xCO2 (row 4 above), and simulated minus regression, on one shared
+symmetric scale. Each map page is followed by its zonal-statistics
 page. Outputs, in ``data/output/co2_amoc_decomposition/``:
 
 - ``<var>_2101-2150_<T>.pdf`` -- the decomposition and check map pages, each
@@ -94,7 +94,7 @@ def run_for_variable(name, amoc_grid, amoc_power):
             field = decomposition["contribution"].sel(co2=co2, param=param)
             print(f"[{name}] {co2}xCO2 {param}: global mean "
                   + value_with_units(f"{float(dl.global_mean(field)):.4g}", units))
-        fitted_change = decomposition["contribution"].sel(co2=co2).drop_sel(param="intercept").sum("param")
+        fitted_change = decomposition["fitted_change"].sel(co2=co2)
         simulated_change = actual.sel(co2=co2) - actual.sel(co2=1)
         print(f"[{name}] {co2}xCO2 - 1xCO2, regression / simulated: global mean "
               + value_with_units(f"{float(dl.global_mean(fitted_change)):.4g} / "
@@ -106,12 +106,12 @@ def run_for_variable(name, amoc_grid, amoc_power):
     pdf_path = os.path.join(OUT_DIR, f"{name}_{grid.attrs['time_mean']}_{tag}.pdf")
     with PdfPages(pdf_path) as pdf:
         plot_co2_amoc_decomposition(
-            decomposition, actual, name, units, cmap,
+            decomposition, name, units, cmap,
             f"{header}\ndecomposition of the nxCO2 − 1xCO2 (no hosing) response; "
             f"rows 1-3, coefficient significance: {SIGNIFICANCE_CONTOUR_KEY}", pdf)
         plot_co2_amoc_reconstruction_check(
-            actual, decomposition["fitted"], name, units, cmap,
-            f"{header}\nno-hosing runs: simulated vs reconstructed from the regression", pdf)
+            actual, decomposition, name, units, cmap,
+            f"{header}\nno-hosing runs: simulated vs regression nxCO2 − 1xCO2", pdf)
     nc_path = os.path.join(OUT_DIR, f"{name}_{tag}_fit.nc")
     fit.to_netcdf(nc_path)
     print(f"[{name}] wrote {pdf_path}\n[{name}] wrote {nc_path}")

@@ -562,8 +562,9 @@ def co2_amoc_decomposition(fit, amoc_grid):
     dC = log2(CO2 multiple) and dA = that run's transformed AMOC minus the
     control's, at the fit's ``amoc_power`` (``delta_log2_co2``,
     ``delta_amoc_transformed``; both 0 at 1xCO2). ``delta_amoc`` is the untransformed
-    change (Sv), ``fitted`` the sum of the terms (the reconstructed field), and
-    ``pvalue`` each coefficient's p-value."""
+    change (Sv), ``fitted`` the sum of the terms (the reconstructed field),
+    ``fitted_change`` the sum of all but the intercept (the regression's
+    nxCO2 - 1xCO2), and ``pvalue`` each coefficient's p-value."""
     co2 = xr.DataArray(dl.CO2_LEVELS, dims="co2", coords={"co2": dl.CO2_LEVELS})
     delta_log2_co2 = np.log2(co2)
     delta = lambda grid: (grid.sel(co2=co2, hosing=0.0)
@@ -580,6 +581,7 @@ def co2_amoc_decomposition(fit, amoc_grid):
     return xr.Dataset({
         "contribution": contribution,
         "fitted": contribution.sum("param"),
+        "fitted_change": contribution.drop_sel(param="intercept").sum("param"),
         "pvalue": fit["pvalue"],
         "delta_log2_co2": delta_log2_co2,
         "delta_amoc": delta(amoc_grid),
