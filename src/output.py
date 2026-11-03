@@ -969,22 +969,35 @@ def plot_case_grid_page(field, title, cmap, vmin, vmax, pdf, rasterized):
 
 # CO2 x AMOC decomposition book (``scripts/plot_co2_amoc_decomposition.py``). The
 # decomposition page has one column per decomposed CO2 multiple (no hosing) and
-# five rows: the fitted 1xCO2 field (a), the three CO2_AMOC_TERM_ROWS, and their
-# sum, the reconstructed nxCO2 field. Titles are formatted with the column's ``co2``
-# and the AMOC transform's name ``amoc`` (``regression.amoc_transform_label``).
+# five rows of changes from 1xCO2: the three CO2_AMOC_TERM_ROWS, their sum (the
+# regression's nxCO2 - 1xCO2; the intercept a cancels), and the simulated
+# nxCO2 - 1xCO2, so the last two rows show how well the partition reproduces the
+# simulated change. Titles are formatted with the column's ``co2`` and the AMOC
+# transform's name ``amoc`` (``regression.amoc_transform_label``).
 CO2_AMOC_COLUMNS = [2, 4]
 CO2_AMOC_TERM_ROWS = [  # (``regression.fit_co2_amoc`` parameter, row title)
     ("log2_co2", "CO2 effect at 1xCO2 AMOC: b·Δlog2(CO2)"),
     ("amoc_anomaly", "AMOC effect at 1xCO2: c·Δ{amoc}"),
     ("log2_co2.amoc_anomaly", "nonlinear: d·Δlog2(CO2)·Δ{amoc}"),
 ]
-CO2_AMOC_BASELINE_TITLE = "fitted 1xCO2 field: a"
-CO2_AMOC_RECONSTRUCTED_TITLE = "reconstructed {co2}xCO2 field: sum of rows 1-4"
+CO2_AMOC_FITTED_CHANGE_TITLE = "regression {co2}xCO2 − 1xCO2: sum of rows 1-3"
+CO2_AMOC_SIMULATED_CHANGE_TITLE = "simulated {co2}xCO2 − 1xCO2"
 
 # A panel of ``plot_field_and_change_grid``: ``change`` panels (differences) share a
 # symmetric diverging scale, the others (absolute fields) a ``viridis`` scale;
 # panels with a ``pvalue`` (else None) get significance contours (``contour_significant``).
 MapPanel = namedtuple("MapPanel", "title field change pvalue")
+
+
+def _shared_map_style(fields, change, cmap):
+    """One color scale shared by ``fields``: for changes a symmetric ``cmap`` scale
+    (white = 0), else ``viridis`` over the 1st-99th percentile."""
+    values = np.concatenate([f.values.ravel() for f in fields])
+    if change:
+        bound = symmetric_bound(values)
+        return {"cmap": cmap, "vmin": -bound, "vmax": bound}
+    low, high = np.nanpercentile(values, [1, 99])
+    return {"cmap": "viridis", "vmin": low, "vmax": high}
 
 
 def plot_field_and_change_grid(panels, shape, name, units, cmap, title, pdf):
@@ -994,17 +1007,15 @@ def plot_field_and_change_grid(panels, shape, name, units, cmap, title, pdf):
     ``panels`` maps ``(row, col)`` to a ``MapPanel``. The absolute panels share one
     ``viridis`` scale (1st-99th percentile over them) and one zonal y range; the
     change panels share one symmetric ``cmap`` scale (white = 0) and their own y
-    range. One horizontal colorbar for each kind sits under the grid. Each panel
-    title gives its area-weighted global mean. Map fields are rasterized at
+    range. One horizontal colorbar for each kind present sits under the grid. Each
+    panel title gives its area-weighted global mean. Map fields are rasterized at
     ``CASE_GRID_RASTER_DPI``.
     """
     labels = {False: label_with_units(name, units), True: label_with_units(f"Δ{name}", units)}
     fields = {change: [p.field for p in panels.values() if p.change == change]
-              for change in (False, True)}
-    low, high = np.nanpercentile(np.concatenate([f.values.ravel() for f in fields[False]]), [1, 99])
-    bound = symmetric_bound(np.concatenate([f.values.ravel() for f in fields[True]]))
-    style = {False: {"cmap": "viridis", "vmin": low, "vmax": high},
-             True: {"cmap": cmap, "vmin": -bound, "vmax": bound}}
+              for change in {p.change for p in panels.values()}}
+    style = {change: _shared_map_style(kind_fields, change, cmap)
+             for change, kind_fields in fields.items()}
     levels = {change: colorbar_levels(s["vmin"], s["vmax"]) for change, s in style.items()}
     mean_format = {False: "{:.4g}", True: "{:+.3g}"}
 
@@ -1028,7 +1039,7 @@ def plot_field_and_change_grid(panels, shape, name, units, cmap, title, pdf):
     fig.suptitle(title, fontsize=11)
     _save_figure(fig, pdf=pdf, dpi=CASE_GRID_RASTER_DPI)
 
-    ylims = {change: zonal_range(fields[change]) for change in (False, True)}
+    ylims = {change: zonal_range(kind_fields) for change, kind_fields in fields.items()}
     plot_zonal_grid(
         {cell: ZonalPanel(panel.title, panel.field, ZONAL_NEUTRAL_COLOR,
                           ylims[panel.change], labels[panel.change])
@@ -1037,15 +1048,16 @@ def plot_field_and_change_grid(panels, shape, name, units, cmap, title, pdf):
     )
 
 
-def plot_co2_amoc_decomposition(decomposition, name, units, cmap, title, pdf):
+def plot_co2_amoc_decomposition(decomposition, actual, name, units, cmap, title, pdf):
     """Map page (plus zonal page) of a ``regression.co2_amoc_decomposition`` result:
     one column per ``CO2_AMOC_COLUMNS`` level, headed by its Δlog2(CO2), ΔAMOC and the
-    change in transformed AMOC (e.g. Δlog2(AMOC)),
-    and five rows: the fitted 1xCO2 field, the ``CO2_AMOC_TERM_ROWS`` terms
-    (contoured where their coefficient's p <= ``SIGNIFICANCE_P``) and the
-    reconstructed field (their sum). Rows 1 and 5 share one absolute scale, rows
-    2-4 one diverging scale (``plot_field_and_change_grid``)."""
+    change in transformed AMOC (e.g. Δlog2(AMOC)), and five rows of changes from
+    1xCO2: the ``CO2_AMOC_TERM_ROWS`` terms (contoured where their coefficient's
+    p <= ``SIGNIFICANCE_P``), their sum (the regression's nxCO2 - 1xCO2) and the
+    simulated nxCO2 - 1xCO2 from ``actual`` (the no-hosing runs, ``(co2, lat, lon)``).
+    All rows share one diverging scale (``plot_field_and_change_grid``)."""
     amoc = decomposition.attrs["amoc_transform"]
+    terms = [param for param, _ in CO2_AMOC_TERM_ROWS]
     panels = {}
     for j, co2 in enumerate(CO2_AMOC_COLUMNS):
         column = decomposition.sel(co2=co2)
@@ -1053,14 +1065,17 @@ def plot_co2_amoc_decomposition(decomposition, name, units, cmap, title, pdf):
                   f"ΔAMOC = {float(column['delta_amoc']):+.2f} Sv,\n"
                   f"Δ{amoc} = "
                   f"{float(column['delta_amoc_transformed']):+.3g}")
-        panels[0, j] = MapPanel(f"{header}\n{CO2_AMOC_BASELINE_TITLE}",
-                                column["contribution"].sel(param="intercept"), False, None)
-        for i, (param, row_title) in enumerate(CO2_AMOC_TERM_ROWS, start=1):
+        for i, (param, row_title) in enumerate(CO2_AMOC_TERM_ROWS):
             panels[i, j] = MapPanel(row_title.format(amoc=amoc), column["contribution"].sel(param=param), True,
                                     column["pvalue"].sel(param=param))
-        panels[len(CO2_AMOC_TERM_ROWS) + 1, j] = MapPanel(
-            CO2_AMOC_RECONSTRUCTED_TITLE.format(co2=co2), column["fitted"], False, None)
-    plot_field_and_change_grid(panels, (len(CO2_AMOC_TERM_ROWS) + 2, len(CO2_AMOC_COLUMNS)),
+        panels[0, j] = panels[0, j]._replace(title=f"{header}\n{panels[0, j].title}")
+        panels[len(terms), j] = MapPanel(
+            CO2_AMOC_FITTED_CHANGE_TITLE.format(co2=co2),
+            column["contribution"].sel(param=terms).sum("param"), True, None)
+        panels[len(terms) + 1, j] = MapPanel(
+            CO2_AMOC_SIMULATED_CHANGE_TITLE.format(co2=co2),
+            actual.sel(co2=co2) - actual.sel(co2=1), True, None)
+    plot_field_and_change_grid(panels, (len(terms) + 2, len(CO2_AMOC_COLUMNS)),
                                name, units, cmap, title, pdf)
 
 
