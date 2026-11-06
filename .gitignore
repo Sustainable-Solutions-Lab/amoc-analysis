@@ -35,7 +35,9 @@ Thumbs.db
 data/output/
 
 # Input data (large CESM2 NetCDF — read-only reference data, not tracked)
-data/input/
+data/input/*
+# ...except PDF documentation describing the data, which is tracked
+!data/input/*.pdf
 
 # Derived annual-mean intermediate files (regenerable from data/input/)
 data/processed/
