@@ -27,6 +27,7 @@ from matplotlib.patches import Patch
 from matplotlib.ticker import MaxNLocator
 from scipy import stats
 
+import co2_amoc_metrics as cam
 import data_loader as dl
 
 SIGNIFICANCE_P = 0.05
@@ -1162,21 +1163,29 @@ def draw_zonal_strip(ax, means, band, ylim, xlim, units, band_color=ZONAL_NEUTRA
     latitude, so that with ``ylim`` = the neighbouring map's y range the latitudes
     line up: the shaded ``band`` (a ``(low, high)`` pair of ``lat`` DataArrays) in
     ``band_color``, the all-longitude mean (thick black) and thin land / ocean
-    means, from ``means`` (a ``land_ocean_zonal_means``-style dict)."""
+    means, from ``means`` (a ``land_ocean_zonal_means``-style dict; only the
+    ``LAND_OCEAN_STYLE`` surfaces it holds are drawn, so ``{"all": ...}`` alone
+    draws just the mean, as for a land-only field)."""
     y = projected_latitude(means["all"]["lat"].values)
     low, high = band
     ax.fill_betweenx(y, low.values, high.values, color=band_color, **ZONAL_STYLE["band"])
-    for surface, style in LAND_OCEAN_STYLE.items():
-        ax.plot(means[surface].values, y, **style)
+    for surface in LAND_OCEAN_STYLE.keys() & means.keys():
+        ax.plot(means[surface].values, y, **LAND_OCEAN_STYLE[surface])
     ax.plot(means["all"].values, y, color=ZONAL_NEUTRAL_COLOR, **ZONAL_STYLE["mean"])
     ax.axvline(0, color="0.5", lw=0.5)
-    ax.set_ylim(ylim)
     ax.set_xlim(xlim)
+    _strip_latitude_axis(ax, ylim, units)
+
+
+def _strip_latitude_axis(ax, ylim, xlabel):
+    """Projected-latitude y axis (ticks on the right) of a strip beside a map whose
+    y range is ``ylim``, with x label ``xlabel``."""
+    ax.set_ylim(ylim)
     ax.set_yticks(projected_latitude(SINE_LATITUDE_TICKS),
                   [latitude_label(t) for t in SINE_LATITUDE_TICKS], fontsize=7)
     ax.yaxis.tick_right()
     ax.tick_params(axis="x", labelsize=7)
-    ax.set_xlabel(units, fontsize=8)
+    ax.set_xlabel(xlabel, fontsize=8)
     ax.grid(alpha=0.3)
 
 
@@ -1359,3 +1368,273 @@ def plot_case_grid_book(grid, pdf, rasterized):
         plot_case_grid_page(field, f"{header}\n{label}", diverging, -bound, bound,
                             pdf, rasterized)
         plot_case_grid_zonal_page(field, f"{header}\n{label}", pdf)
+
+
+# Land-only CO2 / AMOC metric pages (``plot_co2_amoc_metrics``,
+# ``plot_co2_amoc_scaled_metrics``). Ocean cells are missing data, drawn in
+# OCEAN_COLOR: a pale blue-grey, distinct from the white zero of the diverging maps
+# and from the grey "not substantive" category. The two exacerbate / ameliorate
+# metrics (E and f) share METRIC_CMAP, purple where AMOC slowdown exacerbates the
+# CO2 change and green where it ameliorates it; the categories reuse those colors
+# (CATEGORY_COLORS follows ``cam.CLASS_NAMES``). The three-part maps blend
+# FRACTION_COLORS (following ``cam.FRACTION_NAMES``: AMOC orange, CO2 blue, scale
+# white) in proportion to the ``cam.component_fractions``.
+OCEAN_COLOR = "#dde6ee"
+METRIC_CMAP = plt.colormaps["PRGn_r"].with_extremes(bad=OCEAN_COLOR)
+SCALE_CMAP = plt.colormaps["viridis"].with_extremes(bad=OCEAN_COLOR)
+CATEGORY_COLORS = ["0.8", "#762a83", "#a6dba0", "#1b7837", "darkorange"]
+CATEGORY_CMAP = mcolors.ListedColormap(CATEGORY_COLORS).with_extremes(bad=OCEAN_COLOR)
+FRACTION_COLORS = ["#e66101", "#2166ac", "white"]
+SHARE_BOUND = 1.0
+TERNARY_KEY_PIXELS = 300
+TERNARY_POINT_STYLE = {"s": 2, "c": "black", "alpha": 0.25, "lw": 0}
+LAND_STRIP_LEGEND_HANDLES = [
+    Line2D([], [], color=ZONAL_NEUTRAL_COLOR, label="land zonal mean", **ZONAL_STYLE["mean"]),
+    Patch(facecolor=ZONAL_NEUTRAL_COLOR, label="{:.0f}–{:.0f}% of land cells".format(
+        *(100 * q for q in dl.ZONAL_BAND_QUANTILES)), **ZONAL_STYLE["band"]),
+    Patch(facecolor=OCEAN_COLOR, edgecolor="0.5", lw=0.5, label="ocean (missing)"),
+]
+# A metric page's scale S: its symbol, the factor and units for C / S, A / S and E
+# (sigma-scaled values in sigma, gross-flux-scaled ones in %), and the colorbar
+# label of S itself.
+MetricScale = namedtuple("MetricScale", "symbol factor scaled_units")
+SD_SCALE = MetricScale("σ", 1.0, "σ")
+GROSS_FLUX_SCALE = MetricScale("S", 100.0, "%")
+
+
+def _land_map_with_strip(fig, map_cell, strip_cell, field, title, cmap, vmin, vmax, pvalue,
+                         strip_xlim, colorbar_label, strip_label):
+    """Map of the land-only ``field`` on [``vmin``, ``vmax``] with its colorbar,
+    significance contours at its ticks (none for ``pvalue=None``), and a strip of its
+    land zonal mean and 5-95% band over land longitudes (``draw_zonal_strip``)."""
+    ax = fig.add_subplot(map_cell, projection=PROJECTION)
+    mesh = draw_field(ax, field, cmap=cmap, vmin=vmin, vmax=vmax, rasterized=True)
+    levels = colorbar_levels(vmin, vmax)
+    if pvalue is not None:
+        contour_significant(ax, field, pvalue, levels)
+    draw_coastlines(ax)
+    ax.set_global()
+    ax.set_title(title, fontsize=9)
+    cbar = fig.colorbar(mesh, ax=ax, orientation="horizontal", shrink=0.8, pad=0.03,
+                        aspect=30, extend="both", ticks=levels)
+    cbar.set_label(colorbar_label, fontsize=8)
+    cbar.ax.tick_params(labelsize=7)
+    zonal = dl.zonal_statistics(field)
+    draw_zonal_strip(fig.add_subplot(strip_cell), {"all": zonal["mean"]},
+                     (zonal["low"], zonal["high"]), ax.get_ylim(), strip_xlim, strip_label)
+
+
+def draw_stacked_strip(ax, fractions, colors, ylim, xlabel):
+    """Stacked shares (``fractions``: a ``(component, lat)`` DataArray, components in
+    ``colors`` order) against the projected latitude, beside a map whose y range is
+    ``ylim``. Latitudes with NaN shares (no land) are left blank."""
+    y = projected_latitude(fractions["lat"].values)
+    cumulative = np.vstack([np.zeros(y.size), fractions.cumsum(fractions.dims[0]).values])
+    for index, color in enumerate(colors):
+        ax.fill_betweenx(y, cumulative[index], cumulative[index + 1], color=color, lw=0)
+    ax.set_xlim(0, 1)
+    _strip_latitude_axis(ax, ylim, xlabel)
+
+
+def fraction_colors(fractions):
+    """RGB ``(lat, lon, rgb)`` blend of ``FRACTION_COLORS`` weighted by the
+    ``cam.FRACTION_NAMES`` variables of ``fractions``; NaN (ocean) cells take
+    ``OCEAN_COLOR``."""
+    rgb = sum(fractions[name] * xr.DataArray(np.array(mcolors.to_rgb(color)), dims="rgb")
+              for name, color in zip(cam.FRACTION_NAMES, FRACTION_COLORS))
+    ocean = xr.DataArray(np.array(mcolors.to_rgb(OCEAN_COLOR)), dims="rgb")
+    return rgb.fillna(ocean).transpose("lat", "lon", "rgb")
+
+
+def _fraction_map_with_strip(fig, map_cell, strip_cell, fractions, title):
+    """Three-part map of ``fractions`` (``fraction_colors``) with a strip of the land
+    zonal means of the three fractions, stacked."""
+    ax = fig.add_subplot(map_cell, projection=PROJECTION)
+    draw_field(ax, fraction_colors(fractions), rasterized=True)
+    draw_coastlines(ax)
+    ax.set_global()
+    ax.set_title(title, fontsize=9)
+    zonal = xr.concat([fractions[name].mean("lon") for name in cam.FRACTION_NAMES],
+                      dim="component")
+    draw_stacked_strip(fig.add_subplot(strip_cell), zonal, FRACTION_COLORS, ax.get_ylim(),
+                       "land zonal-mean share")
+
+
+def barycentric_xy(fractions):
+    """Key-triangle coordinates of the ``cam.FRACTION_NAMES`` shares: AMOC at the
+    lower left (0, 0), CO2 at the lower right (1, 0), the scale at the top."""
+    amoc, co2, scale = (np.asarray(fractions[name]) for name in cam.FRACTION_NAMES)
+    return co2 + 0.5 * scale, np.sqrt(3) / 2 * scale
+
+
+def draw_ternary_key(ax, fractions, symbol, summary):
+    """Color key of the three-part maps: the triangle of ``FRACTION_COLORS`` blends,
+    with each land cell of ``fractions`` as a dot, and the land-wide ``summary``
+    (``cam.land_summary``) beneath it."""
+    x, y = np.meshgrid(np.linspace(0, 1, TERNARY_KEY_PIXELS),
+                       np.linspace(0, np.sqrt(3) / 2, TERNARY_KEY_PIXELS))
+    scale = y / (np.sqrt(3) / 2)
+    co2 = x - 0.5 * scale
+    amoc = 1 - co2 - scale
+    inside = (amoc >= 0) & (co2 >= 0)
+    key = fraction_colors(xr.Dataset({
+        name: (("lat", "lon"), np.where(inside, share, np.nan))
+        for name, share in zip(cam.FRACTION_NAMES, (amoc, co2, scale))}))
+    ax.imshow(np.dstack([key.values, inside.astype(float)]), origin="lower",
+              extent=(0, 1, 0, np.sqrt(3) / 2))
+    land_cells = fractions[cam.FRACTION_NAMES].stack(cell=("lat", "lon")).dropna("cell")
+    ax.scatter(*barycentric_xy(land_cells), **TERNARY_POINT_STYLE)
+    ax.plot([0, 1, 0.5, 0], [0, 0, np.sqrt(3) / 2, 0], color="black", lw=0.6)
+    ax.text(0, -0.04, "|A|: AMOC slowdown", ha="center", va="top", fontsize=8)
+    ax.text(1, -0.04, "|C|: CO₂", ha="center", va="top", fontsize=8)
+    ax.text(0.5, np.sqrt(3) / 2 + 0.03, f"{symbol}: natural scale", ha="center", va="bottom",
+            fontsize=8)
+    ax.text(0.5, -0.14,
+            f"key: share of |A|, |C| and {symbol} in {symbol} + |A| + |C|; dots = land cells\n"
+            f"land-wide, area-weighted:  RMS(A) / RMS(C) = {summary['rms_ratio']:.3g}\n"
+            f"pattern congruence of A with C = {summary['pattern_congruence']:+.2f}  "
+            f"(uncentered; −1: A opposes C everywhere)\n"
+            f"pattern correlation of A with C = {summary['pattern_correlation']:+.2f}  "
+            f"(centered, about land means)",
+            ha="center", va="top", fontsize=8)
+    ax.set_xlim(-0.12, 1.12)
+    ax.set_ylim(-0.42, np.sqrt(3) / 2 + 0.1)
+    ax.set_aspect("equal")
+    ax.axis("off")
+
+
+def _scale_panels(fig, gridspec, scaled, metric_scale, scale_field, scale_title, pvalues):
+    """The panels every metric page shares, for scale S = ``scale_field``: row 0
+    C / S, A / S (one shared symmetric bound; ``RdBu`` for water fluxes, else
+    ``RdBu_r``), S (sequential), and the three-part map; row 1 column 0, E. ``scaled``
+    holds the ``cam.scaled_metrics`` on land; ``pvalues`` maps ``co2``, ``amoc`` to the
+    effects' p-values. Returns the gridspec cells of a 2 x 4 page as (map, strip) pairs."""
+    units = scaled.attrs["units"]
+    symbol, factor, scaled_units = metric_scale
+    co2_scaled = factor * scaled["co2_scaled"]
+    amoc_scaled = factor * scaled["amoc_scaled"]
+    departure = factor * scaled["departure_change"]
+    effect_bound = symmetric_bound(np.stack([co2_scaled.values, amoc_scaled.values]))
+    effect_cmap = plt.colormaps["RdBu" if units == dl.WATER_FLUX_UNITS else "RdBu_r"].with_extremes(
+        bad=OCEAN_COLOR)
+    effect_zonal = [dl.zonal_statistics(field) for field in (co2_scaled, amoc_scaled)]
+    effect_xlim = zonal_range([z[key] for z in effect_zonal for key in ("low", "high")])
+    departure_bound = symmetric_bound(departure.values)
+    c1, c4, c4slow = (cam.CASE_LABELS[case] for case in dl.CO2_AMOC_CASES)
+
+    def land_mean(field, field_units):
+        return f"land mean = {value_with_units(f'{float(dl.global_mean(field)):+.3g}', field_units)}"
+
+    def cell(row, col):
+        return gridspec[row, 2 * col], gridspec[row, 2 * col + 1]
+
+    panels = {
+        (0, 0): (co2_scaled, f"C / {symbol}, C = {c4} − {c1} (CO₂ effect, AMOC ~20 Sv)\n"
+                             f"{land_mean(co2_scaled, scaled_units)}",
+                 effect_cmap, -effect_bound, effect_bound, pvalues["co2"], effect_xlim,
+                 f"C / {symbol} ({scaled_units})"),
+        (0, 1): (amoc_scaled, f"A / {symbol}, A = {c4slow} − {c4} (AMOC-slowdown effect)\n"
+                              f"{land_mean(amoc_scaled, scaled_units)}",
+                 effect_cmap, -effect_bound, effect_bound, pvalues["amoc"], effect_xlim,
+                 f"A / {symbol} ({scaled_units})"),
+        (0, 2): (scale_field, f"{scale_title}\n{land_mean(scale_field, units)}",
+                 SCALE_CMAP, 0.0, float(np.nanpercentile(scale_field.values, 99)), None,
+                 zonal_range([scale_field]), label_with_units(symbol, units)),
+        (1, 0): (departure, f"E = (|T| − |C|) / {symbol}, T = {c4slow} − {c1}\n"
+                            f"> 0: AMOC slowdown moves climate farther from {c1} (exacerbates), "
+                            f"< 0: closer\n{land_mean(departure, scaled_units)}",
+                 METRIC_CMAP, -departure_bound, departure_bound, pvalues["amoc"],
+                 zonal_range([departure]), f"E ({scaled_units})"),
+    }
+    for position, (field, title, cmap, vmin, vmax, pvalue, strip_xlim, label) in panels.items():
+        _land_map_with_strip(fig, *cell(*position), field, title, cmap, vmin, vmax, pvalue,
+                             strip_xlim, label, label)
+    _fraction_map_with_strip(fig, *cell(0, 3), scaled,
+                             f"|A|, |C| and {symbol} as shares of {symbol} + |A| + |C|\n"
+                             f"orange: AMOC slowdown, blue: CO₂, white: within the {symbol} scale")
+    return cell
+
+
+def _metric_page(scaled, metric_scale, scale_field, scale_title, pvalues, summary, title_note):
+    """2 x 4 figure with the ``_scale_panels`` and the ternary key at row 1, column 3.
+    Returns the figure and the ``cell`` function for the remaining panels."""
+    fig = plt.figure(figsize=(29, 10.5), layout="constrained")
+    gridspec = fig.add_gridspec(2, 8, width_ratios=[4.5, 1] * 4)
+    cell = _scale_panels(fig, gridspec, scaled, metric_scale, scale_field, scale_title, pvalues)
+    draw_ternary_key(fig.add_subplot(gridspec[1, 6:8]), scaled, metric_scale.symbol, summary)
+    c1, c4, c4slow = (cam.CASE_LABELS[case] for case in dl.CO2_AMOC_CASES)
+    units = scaled.attrs["units"]
+    fig.legend(handles=LAND_STRIP_LEGEND_HANDLES, loc="outside lower left", ncol=3, fontsize=8,
+               title="right strips: statistics over land longitudes at each latitude (stacked "
+               "strips: shares of land cells); land = Natural Earth 110m", title_fontsize=8)
+    fig.suptitle(f"{scaled.attrs['name']}: {label_with_units(scaled.attrs['long_name'], units)}, "
+                 f"CESM1.2 means {scaled.attrs['time_mean']}, land only — "
+                 f"{c1} = 1xCO2, {c4} = 4xCO2_m03Sv, {c4slow} = 4xCO2; {title_note}\n"
+                 f"significance: Welch t-test on 10-year means (C, A: own effect; E, f: A); "
+                 f"{SIGNIFICANCE_CONTOUR_KEY}",
+                 fontsize=11)
+    return fig, cell
+
+
+def plot_co2_amoc_metrics(metrics, summary, out_path):
+    """One-page 2 x 4 PDF of land-only metrics of whether AMOC slowdown exacerbates
+    or ameliorates the 4xCO2 response, scaled by natural variability sigma
+    (``metrics``: a ``cam.land_metrics`` result; C, A, T, sigma, E and f as defined in
+    ``co2_amoc_metrics``; ``summary``: ``cam.land_summary`` of its effects):
+
+        C / sigma   A / sigma               sigma        |A|, |C|, sigma shares
+        E           f = A sgn(C)/(|A|+|C|)  categories   key and land-wide numbers
+
+    C / sigma and A / sigma share one symmetric bound and are each contoured by their
+    own significance; E has its own symmetric bound and f a fixed -1..+1 scale, both
+    on ``METRIC_CMAP`` and contoured by the significance of A. The three-part map
+    blends ``FRACTION_COLORS``; its key places each land cell in the triangle. Every
+    map carries a strip: land zonal statistics, or stacked shares of land cells for
+    the categories and the three-part map. The category legend gives each
+    category's share of the land area. Titles give land-area means.
+    """
+    pvalues = {"co2": metrics["co2_effect_pvalue"], "amoc": metrics["amoc_effect_pvalue"]}
+    fig, cell = _metric_page(
+        metrics, SD_SCALE, metrics["sd"],
+        f"σ: interannual SD of {cam.CASE_LABELS[cam.BASELINE_CASE]} annual means\n"
+        f"({metrics.attrs['sd_years']}, linearly detrended)",
+        pvalues, summary, "scale: natural variability σ")
+
+    share = metrics["share"]
+    _land_map_with_strip(fig, *cell(1, 1), share,
+                         "f = A·sgn(C) / (|A| + |C|) = R / (1 + |R|), R = A / C\n"
+                         "+0.5: AMOC doubles the CO₂ change; −0.5: cancels it; ±1: AMOC dominates\n"
+                         f"land mean = {float(dl.global_mean(share)):+.3g}",
+                         METRIC_CMAP, -SHARE_BOUND, SHARE_BOUND, pvalues["amoc"],
+                         (-SHARE_BOUND, SHARE_BOUND), "f", "f")
+
+    categories = metrics["category"]
+    land = metrics["land"]
+    fractions = cam.land_area_fractions(categories, land)
+    map_cell, strip_cell = cell(1, 2)
+    ax = fig.add_subplot(map_cell, projection=PROJECTION)
+    draw_field(ax, categories, cmap=CATEGORY_CMAP, vmin=-0.5, vmax=len(CATEGORY_COLORS) - 0.5,
+               rasterized=True)
+    draw_coastlines(ax)
+    ax.set_global()
+    ax.set_title(f"Categories: an effect is substantive where |effect| ≥ "
+                 f"{metrics.attrs['threshold_sd']:g}σ\nand p ≤ {cam.SIGNIFICANCE_P}; "
+                 f"exacerbates / offsets / reverses need a substantive C", fontsize=9)
+    ax.legend(handles=[Patch(facecolor=color, label=f"{name}: {fraction:.0%} of land area")
+                       for color, (name, fraction) in zip(CATEGORY_COLORS, fractions.items())],
+              loc="upper center", bbox_to_anchor=(0.5, -0.02), fontsize=7, ncol=2)
+    draw_stacked_strip(fig.add_subplot(strip_cell), cam.zonal_category_fractions(categories, land),
+                       CATEGORY_COLORS, ax.get_ylim(), "share of land cells")
+    _save_figure(fig, out_path=out_path, dpi=CASE_GRID_RASTER_DPI)
+
+
+def plot_co2_amoc_scaled_metrics(scaled, pvalues, summary, out_path):
+    """One-page PDF of the scale-dependent metrics with the base state's gross water
+    flux S = P0 + E0 as the scale (``scaled``: a ``cam.land_scaled_metrics`` result;
+    ``pvalues``: ``co2`` / ``amoc`` effect p-values; ``summary``: ``cam.land_summary``),
+    laid out as row 0 and row 1, column 0 of ``plot_co2_amoc_metrics``, with C / S,
+    A / S and E in % of S. The ternary key is at row 1, column 3."""
+    fig, _ = _metric_page(scaled, GROSS_FLUX_SCALE, scaled["scale"],
+                          f"S = {scaled.attrs['scale_label']}",
+                          pvalues, summary, f"scale: S = {scaled.attrs['scale_label']}")
+    _save_figure(fig, out_path=out_path, dpi=CASE_GRID_RASTER_DPI)
