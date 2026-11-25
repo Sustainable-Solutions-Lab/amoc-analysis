@@ -6,23 +6,30 @@ to the runs), per land cell: C = c4a20 - c1a20 (CO2 effect), A = c4a04 - c4a20
 (AMOC-slowdown effect), T = A + C, and sigma = interannual SD of the c1a20 annual
 means over the whole control (1850-2150, linearly detrended). Ocean is missing data.
 
-One page per variable (``output.plot_co2_amoc_metrics``): C / sigma, A / sigma,
-sigma; the three-part map of |A|, |C| and sigma as shares of sigma + |A| + |C|;
-E = (|T| - |C|) / sigma (> 0 exacerbates, < 0 ameliorates); the bounded share
-f = A sgn(C) / (|A| + |C|); categories (not substantive / exacerbates / partly
-offsets / reverses / AMOC-only), an effect counting as substantive where it is at
-least ``--threshold-sd`` sigma and significant (Welch t-test on 10-year means,
-p <= 0.05); and the three-part map's key with land-wide numbers
-(``co2_amoc_metrics.land_summary``: RMS(A) / RMS(C), pattern congruence and
-correlation of A with C). Water-flux variables (mm/day) get a second page
-(``output.plot_co2_amoc_scaled_metrics``) with the c1a20 gross water flux
-S = P0 + E0 (``data_loader.gross_water_flux``, same years) in place of sigma.
+One page per variable (``output.plot_co2_amoc_metrics``), in rows: C, A, T;
+C / sigma, A / sigma, T / sigma; and
+E = (|T| - |C|) / sigma (> 0 exacerbates, < 0 ameliorates), the ratio R = A / C
+(-1: AMOC slowdown cancels the CO2 effect, < -1: overcompensates, +1: doubles it;
+only where the CO2 effect is substantive, and marked where it is not but the total
+T is), and the three-part map of |A|, |C| and sigma as shares of sigma + |A| + |C|
+with its key triangle and land-wide numbers (``co2_amoc_metrics.land_summary``:
+RMS(A) / RMS(C), pattern congruence and correlation of A with C). An effect is
+substantive where it is at least ``--threshold-sd`` sigma and significant (Welch
+t-test on 10-year means, p <= 0.05).
+The categories (not substantive / exacerbates / partly offsets / overcompensates /
+AMOC-only) are tabulated in the CSV, not mapped.
 
-Outputs in ``data/output/co2_amoc_metrics/``: ``<var>_2101-2150_<k>sd.pdf`` (and
-``<var>_gross_flux_2101-2150_<k>sd.pdf``), merged into ``book_2101-2150_<k>sd.pdf``,
-and ``land_summary_2101-2150_<k>sd.csv``, one row per variable: each category's
-share of the area-weighted land area, the land-mean E, and the land-wide numbers. ``--variables`` takes set names from ``data_loader.VARIABLE_SETS``
-and/or variable names (default ``all``).
+Outputs in ``data/output/co2_amoc_metrics/``: ``<var>_2101-2150_<k>sd.pdf``, merged into ``book_2101-2150_<k>sd.pdf``
+after a guide page explaining the metrics (``guide_2101-2150_<k>sd.pdf``) and
+before a summary table page (``land_summary_2101-2150_<k>sd.pdf``); the same table
+as ``land_summary_2101-2150_<k>sd.csv`` and ``.xlsx``, one row per variable
+(``co2_amoc_metrics.SUMMARY_COLUMNS``): each category's share of the area-weighted
+land area, the shares of land with R < -1 (overcompensation) and where only T is
+substantive (a change only with AMOC slowdown), the median R, the land-mean E,
+and the land-wide numbers.
+``--variables`` takes set names from ``data_loader.VARIABLE_SETS`` and/or variable
+names (default ``all``); prescribed variables (``data_loader.PRESCRIBED_VARIABLES``,
+e.g. SOLIN), identical in every run and so with no CO2 or AMOC effect, are skipped.
 
     python scripts/plot_co2_amoc_metrics.py [--variables minimal] [--threshold-sd 1]
 """
@@ -38,7 +45,9 @@ from pypdf import PdfWriter
 
 import co2_amoc_metrics as cam
 import data_loader as dl
-from output import plot_co2_amoc_metrics, plot_co2_amoc_scaled_metrics
+from output import (plot_co2_amoc_metrics, plot_co2_amoc_metrics_guide,
+                    plot_co2_amoc_summary_table,
+                    write_co2_amoc_summary_xlsx)
 
 OUT_DIR = os.path.join(dl._REPO_ROOT, "data", "output", "co2_amoc_metrics")
 FIRST_YEAR, LAST_YEAR = 2101, 2150
@@ -52,13 +61,11 @@ def main():
                              "interannual SDs of c1a20 (and significant); default "
                              f"{cam.DEFAULT_THRESHOLD_SD:g}")
     args = parser.parse_args()
-    variables = dl.resolve_variables(args.variables)
+    variables = [var for var in dl.resolve_variables(args.variables)
+                 if var not in dl.PRESCRIBED_VARIABLES]
     tag = f"{FIRST_YEAR}-{LAST_YEAR}_{args.threshold_sd:g}sd"
 
     os.makedirs(OUT_DIR, exist_ok=True)
-    gross_flux = dl.gross_water_flux(cam.BASELINE_CASE, FIRST_YEAR, LAST_YEAR).load()
-    gross_flux_label = (f"P₀ + E₀, gross water flux of {cam.CASE_LABELS[cam.BASELINE_CASE]} "
-                        f"({FIRST_YEAR}-{LAST_YEAR} mean)")
     page_paths = []
     rows = {}
     for var in variables:
@@ -70,28 +77,31 @@ def main():
         plot_co2_amoc_metrics(metrics, summary, out_path)
         page_paths.append(out_path)
         print(f"wrote {out_path}")
-        rows[var] = {**cam.land_area_fractions(metrics["category"], metrics["land"]),
-                     "land_mean_E_in_sd": float(dl.global_mean(metrics["departure_change"])),
-                     **summary}
-        if fields.attrs["units"] == dl.WATER_FLUX_UNITS:
-            scaled = cam.land_scaled_metrics(metrics, gross_flux, gross_flux_label)
-            pvalues = {"co2": metrics["co2_effect_pvalue"], "amoc": metrics["amoc_effect_pvalue"]}
-            out_path = os.path.join(OUT_DIR, f"{var}_gross_flux_{tag}.pdf")
-            plot_co2_amoc_scaled_metrics(scaled, pvalues, summary, out_path)
-            page_paths.append(out_path)
-            print(f"wrote {out_path}")
+        rows[var] = cam.variable_summary(metrics, summary)
 
+    table = pd.DataFrame.from_dict(rows, orient="index").rename_axis("variable")
+    time_mean = metrics.attrs["time_mean"]
     table_path = os.path.join(OUT_DIR, f"land_summary_{tag}.csv")
-    pd.DataFrame.from_dict(rows, orient="index").rename_axis("variable").to_csv(
-        table_path, float_format="%.4f")
-    print(f"wrote {table_path}")
+    table.to_csv(table_path, float_format="%.4f")
+    xlsx_path = os.path.join(OUT_DIR, f"land_summary_{tag}.xlsx")
+    write_co2_amoc_summary_xlsx(table, time_mean, args.threshold_sd, xlsx_path)
+    summary_page_path = os.path.join(OUT_DIR, f"land_summary_{tag}.pdf")
+    plot_co2_amoc_summary_table(table, time_mean, args.threshold_sd, summary_page_path)
+    for path in (table_path, xlsx_path, summary_page_path):
+        print(f"wrote {path}")
+
+    guide_path = os.path.join(OUT_DIR, f"guide_{tag}.pdf")
+    plot_co2_amoc_metrics_guide(time_mean, metrics.attrs["sd_years"],
+                                args.threshold_sd, variables, guide_path)
+    print(f"wrote {guide_path}")
 
     book_path = os.path.join(OUT_DIR, f"book_{tag}.pdf")
     writer = PdfWriter()
-    for path in page_paths:
+    book_pages = [guide_path, *page_paths, summary_page_path]
+    for path in book_pages:
         writer.append(path)
     writer.write(book_path)
-    print(f"wrote {book_path}  ({len(page_paths)} pages)")
+    print(f"wrote {book_path}  ({len(book_pages)} pages)")
 
 
 if __name__ == "__main__":

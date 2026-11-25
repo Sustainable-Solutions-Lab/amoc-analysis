@@ -194,6 +194,11 @@ VARIABLE_SETS = {
 }
 
 
+# Variables prescribed identically in every run (SOLIN: top-of-model insolation),
+# so that differences between runs are exactly zero.
+PRESCRIBED_VARIABLES = ("SOLIN",)
+
+
 def resolve_variables(names):
     """Expand set and variable names (``VARIABLE_SETS`` keys) into an ordered,
     duplicate-free list of ``VARIABLES`` keys."""
@@ -295,18 +300,6 @@ def case_annual_fields(var, cases, first_year, last_year):
                     "definition": spec["definition"],
                     "time_mean": f"{first_year}-{last_year}"}
     return fields.rename(var).load()
-
-
-def gross_water_flux(case, first_year, last_year):
-    """Time mean over calendar years ``first_year``..``last_year`` of the gross
-    surface water flux P + E (``pr`` + ``QFLX``, mm/day) of ``case``: a scale of
-    local hydrological activity that, unlike P - E, does not vanish where
-    precipitation and evaporation balance."""
-    years = np.arange(first_year, last_year + 1)
-    flux = sum(load_annual_field(case, var).sel(year=years).mean("year") for var in ("pr", "QFLX"))
-    return flux.rename("gross_water_flux").assign_attrs(
-        units=WATER_FLUX_UNITS, long_name="Gross surface water flux P + E",
-        definition="PRECT * 8.64e7 + QFLX * 86400", time_mean=f"{first_year}-{last_year}")
 
 
 def scalar_file(experiment):
